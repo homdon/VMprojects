@@ -1,0 +1,3 @@
+jenkins-vm/.vagrant/
+jenkins-vm/sonar-server-jenkins-dependency/.vagrant/
+jenkins-vm/nexus-server-jenkins-dependency/.vagrant/
