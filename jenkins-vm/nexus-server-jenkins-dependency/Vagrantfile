@@ -1,0 +1,76 @@
+Vagrant.configure("2") do |config|
+  # Use Ubuntu 22.04 LTS (64-bit)
+  config.vm.box = "ubuntu/jammy64"
+
+  # Define VM resources similar to t2.medium (2 vCPU, 4GB RAM)
+  config.vm.provider "virtualbox" do |vb|
+    vb.name = "nexus-server"
+    vb.memory = 4096
+    vb.cpus = 2
+  end
+
+  # Static IP for networking with Jenkins
+  config.vm.network "private_network", ip: "192.168.56.92"
+
+  # Port forwarding for Nexus (port 8082 on guest to 8082 on host)
+  config.vm.network "forwarded_port", guest: 8081, host: 8081, auto_correct: true
+
+  # Provisioning Script
+  config.vm.provision "shell", inline: <<-SHELL
+    # Update & install dependencies
+    sudo apt-get update -y
+    sudo apt-get install -y openjdk-17-jdk wget tar
+
+    # Nexus version and directories
+    NEXUS_VERSION="3.82.0-08"
+    NEXUS_URL="https://download.sonatype.com/nexus/3/nexus-${NEXUS_VERSION}-linux-x86_64.tar.gz"
+    NEXUS_USER="nexus"
+    NEXUS_DIR="/opt/nexus"
+    TMP_DIR="/tmp/nexus"
+
+    # Create required directories
+    sudo mkdir -p $NEXUS_DIR $TMP_DIR
+    cd $TMP_DIR
+
+    # Download and extract Nexus
+    wget $NEXUS_URL -O nexus.tar.gz
+    tar xzvf nexus.tar.gz
+    NEXUS_EXTRACTED_DIR="nexus-${NEXUS_VERSION}"
+    sudo cp -r $TMP_DIR/* $NEXUS_DIR/
+
+    # Create Nexus user
+    sudo useradd -r -s /bin/false $NEXUS_USER
+    sudo chown -R $NEXUS_USER:$NEXUS_USER $NEXUS_DIR
+
+    # Create and set permissions for sonatype-work directory
+    sudo mkdir -p ${NEXUS_DIR}/sonatype-work
+    sudo chown -R ${NEXUS_USER}:${NEXUS_USER} ${NEXUS_DIR}/sonatype-work
+
+    # Configure Nexus to run as user
+    echo 'run_as_user="nexus"' | sudo tee $NEXUS_DIR/$NEXUS_EXTRACTED_DIR/bin/nexus.rc
+
+    # Create systemd service
+    cat <<EOF | sudo tee /etc/systemd/system/nexus.service
+[Unit]
+Description=nexus service
+After=network.target
+
+[Service]
+Type=forking
+LimitNOFILE=65536
+ExecStart=${NEXUS_DIR}/${NEXUS_EXTRACTED_DIR}/bin/nexus start
+ExecStop=${NEXUS_DIR}/${NEXUS_EXTRACTED_DIR}/bin/nexus stop
+User=${NEXUS_USER}
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable and start Nexus service
+    sudo systemctl daemon-reload
+    sudo systemctl enable nexus
+    sudo systemctl start nexus
+  SHELL
+end
+

@@ -1,0 +1,25 @@
+**Troubleshooting Summary: Nexus Server Setup in Vagrant**
+
+This outlines the issues encountered and resolutions during the setup of a Nexus server within a Vagrant virtual machine environment.
+
+*   **Issue 1: Vagrantfile Syntax Error**
+    *   **Problem:** The initial `Vagrantfile` contained a syntax error (missing `end` keyword), preventing the Vagrant VM from being provisioned or destroyed cleanly.
+    *   **Resolution:** The `Vagrantfile` was corrected, and the VM was reset using `vagrant destroy -f`.
+
+*   **Issue 2: Nexus Download Failure (404 Not Found)**
+    *   **Problem:** During provisioning, the `wget` command failed to download the Nexus archive due to an incorrect URL and an outdated Nexus version specified in the `Vagrantfile`.
+    *   **Resolution:** The `Vagrantfile` was updated to reflect the correct Nexus version (`3.82.0-08`) and its corresponding download URL (`https://download.sonatype.com/nexus/3/nexus-${NEXUS_VERSION}-linux-x86_64.tar.gz`).
+
+*   **Issue 3: Nexus Service Permission Denied**
+    *   **Problem:** After successful download and extraction, the Nexus service failed to start due to `permission denied` errors related to the `/sonatype-work` directory. The `nexus` user lacked write permissions for this critical data directory.
+    *   **Resolution:** The `Vagrantfile` provisioning script was modified to explicitly create the `/opt/nexus/sonatype-work` directory and set appropriate ownership (`chown`) for the `nexus` user.
+
+*   **Issue 4: Nexus Startup Script Shebang (Prior Issue)**
+    *   **Problem:** (Identified and resolved prior to current troubleshooting) The Nexus startup script (`/opt/nexus/bin/nexus`) had an incorrect shebang (`#!/bin/sh` instead of `#!/bin/bash`), causing execution issues.
+    *   **Resolution:** The shebang in the Nexus startup script was corrected.
+
+**Key Commands Used:**
+*   `vagrant up`: Initializes and starts the Vagrant virtual machine.
+*   `vagrant destroy -f`: Destroys the Vagrant virtual machine, removing all associated data.
+*   `vagrant provision`: Executes the provisioning steps defined in the `Vagrantfile` on the running VM.
+*   `vagrant ssh -c "..."`: Executes a shell command directly inside the Vagrant virtual machine.

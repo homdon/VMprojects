@@ -1,0 +1,135 @@
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/jammy64"
+  config.vm.hostname = "sonar"
+  config.vm.network "private_network", ip: "192.168.56.93"
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = "4096"
+    vb.cpus = 2
+  end
+
+  config.vm.provision "shell", inline: <<-SHELL
+    # Host mapping
+    if ! grep -q "sonar" /etc/hosts; then
+      echo "192.168.56.93 sonar" >> /etc/hosts
+    fi
+
+    # Kernel/sysctl and limits tuning
+    cp /etc/sysctl.conf /root/sysctl.conf_backup
+    cat <<EOT > /etc/sysctl.conf
+vm.max_map_count=262144
+fs.file-max=65536
+EOT
+    sysctl -p || true
+    sysctl -w vm.max_map_count=262144
+
+    cp /etc/security/limits.conf /root/sec_limit.conf_backup
+    # Apply limits for sonar user (not sonarqube)
+    cat <<EOT >> /etc/security/limits.conf
+sonar   -   nofile   65536
+sonar   -   nproc    4096
+EOT
+
+    # Java setup
+    apt-get update -y
+    apt-get install -y openjdk-17-jdk zip wget gnupg2 curl ufw unzip
+
+    update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+
+    # PostgreSQL setup
+    wget -q https://www.postgresql.org/media/keys/ACCC4CF8.asc -O - | apt-key add -
+    echo "deb http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+    apt-get update -y
+    apt-get install -y postgresql postgresql-contrib
+    systemctl enable postgresql
+    systemctl start postgresql
+
+    # Create user and DB
+    sudo -u postgres psql -c "CREATE USER sonar WITH ENCRYPTED PASSWORD 'admin123';"
+    sudo -u postgres psql -c "CREATE DATABASE sonarqube OWNER sonar;"
+    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE sonarqube TO sonar;"
+
+    # SonarQube installation
+    mkdir -p /sonarqube && cd /sonarqube
+    curl -O https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-9.9.7.96285.zip
+    unzip -o sonarqube-9.9.7.96285.zip -d /opt/
+    mv /opt/sonarqube-9.9.7.96285 /opt/sonarqube
+
+    groupadd sonar
+    useradd -c "SonarQube - User" -d /opt/sonarqube/ -g sonar sonar
+    chown -R sonar:sonar /opt/sonarqube/
+
+    # Configure sonar.properties
+    cp /opt/sonarqube/conf/sonar.properties /root/sonar.properties_backup
+    cat <<EOT > /opt/sonarqube/conf/sonar.properties
+sonar.jdbc.username=sonar
+sonar.jdbc.password=admin123
+sonar.jdbc.url=jdbc:postgresql://localhost/sonarqube
+sonar.web.host=0.0.0.0
+sonar.web.port=9000
+sonar.web.javaAdditionalOpts=-server
+sonar.search.javaOpts=-Xmx512m -Xms512m -XX:+HeapDumpOnOutOfMemoryError
+sonar.log.level=INFO
+sonar.path.logs=logs
+EOT
+
+    # SonarQube systemd service with correct user and limits
+    cat <<EOT > /etc/systemd/system/sonarqube.service
+[Unit]
+Description=SonarQube service
+After=syslog.target network.target postgresql.service
+
+[Service]
+Type=forking
+ExecStart=/opt/sonarqube/bin/linux-x86-64/sonar.sh start
+ExecStop=/opt/sonarqube/bin/linux-x86-64/sonar.sh stop
+User=sonar
+Group=sonar
+Restart=on-failure
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
+EOT
+
+    systemctl daemon-reload
+    systemctl enable sonarqube.service
+    systemctl start sonarqube.service
+
+    # Nginx setup
+    apt-get install -y nginx
+    rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default
+    cat <<'EOT' > /etc/nginx/sites-available/sonarqube
+server {
+    listen 80;
+    server_name sonar;
+
+    access_log /var/log/nginx/sonar.access.log;
+    error_log /var/log/nginx/sonar.error.log;
+
+    proxy_buffers 16 64k;
+    proxy_buffer_size 128k;
+
+    location / {
+        proxy_pass http://192.168.56.93:9000;
+        proxy_next_upstream error timeout invalid_header http_500 http_502 http_503 http_504;
+        proxy_redirect off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+    }
+}
+EOT
+
+    ln -sf /etc/nginx/sites-available/sonarqube /etc/nginx/sites-enabled/sonarqube
+    systemctl enable nginx
+    systemctl restart nginx
+
+    # Open firewall ports
+    ufw allow 80,9000,9001/tcp || true
+
+  SHELL
+end
+
