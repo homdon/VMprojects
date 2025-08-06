@@ -1,0 +1,41 @@
+pipeline {
+    agent any
+    
+    tools {
+        maven '3.9.0'
+        jdk '17'
+    }
+    
+    stages {
+        stage('Fetch code') {
+            steps {
+                git branch: 'atmo', url: 'https://github.com/hkhcoder/vprofile-project.git'
+            }
+        }
+
+        stage('Unit Test') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh 'mvn install -DskipTests'
+            }
+        }
+        
+        stage('Package') {
+            steps {
+                sh 'mvn package'
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "Archiving artifact"
+            archiveArtifacts artifacts: '**/*.war'
+        }
+    }
+}
